@@ -15,36 +15,30 @@ class PerformanceEvaluator:
         self.train_loader = train_loader
         self.test_loader = test_loader
 
-        self.train_predictions = torch.tensor([], device=device)
-        self.train_labels = torch.tensor([], device=device)
-        self.test_predictions = torch.tensor([], device=device)
-        self.test_labels = torch.tensor([], device=device)
+        train_predictions = []
+        train_labels = []
+        test_predictions = []
+        test_labels = []
         self.model.eval()
         with torch.no_grad():
             for data in self.train_loader:
                 x, edge_index, edge_attr, y = data.x, data.edge_index, data.edge_attr, data.y
-                x = x.to(self.device)
-                edge_index = edge_index.to(self.device)
-                edge_attr = edge_attr.to(self.device)
-                y = y.to(self.device)
+                x, edge_index, edge_attr, y = [i.to(self.device) for i in (x, edge_index, edge_attr, y)]
                 pred = self.model(x, edge_index, edge_attr).squeeze()
-                self.train_predictions = torch.cat((self.train_predictions, pred))
-                self.train_labels = torch.cat((self.train_labels, y))
+                train_predictions.append(pred)
+                train_labels.append(y)
 
             for data in self.test_loader:
                 x, edge_index, edge_attr, y = data.x, data.edge_index, data.edge_attr, data.y
-                x = x.to(self.device)
-                edge_index = edge_index.to(self.device)
-                edge_attr = edge_attr.to(self.device)
-                y = y.to(self.device)
+                x, edge_index, edge_attr, y = [i.to(self.device) for i in (x, edge_index, edge_attr, y)]
                 pred = self.model(x, edge_index, edge_attr).squeeze()
-                self.test_predictions = torch.cat((self.test_predictions, pred))
-                self.test_labels = torch.cat((self.test_labels, y))
+                test_predictions.append(pred)
+                test_labels.append(y)
 
-        self.train_predictions = self.train_predictions.cpu().numpy()
-        self.train_labels = self.train_labels.cpu().numpy()
-        self.test_predictions = self.test_predictions.cpu().numpy()
-        self.test_labels = self.test_labels.cpu().numpy()
+        self.train_predictions = torch.cat(train_predictions).cpu().numpy()
+        self.train_labels = torch.cat(train_labels).cpu().numpy()
+        self.test_predictions = torch.cat(test_predictions).cpu().numpy()
+        self.test_labels = torch.cat(test_labels).cpu().numpy()
 
     def plot_precision_recall_curve(self, save_path='plots/precision_recall_curve.png'):
         self.train_precision, self.train_recall, _ = precision_recall_curve(self.train_labels, self.train_predictions)
