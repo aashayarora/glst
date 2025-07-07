@@ -1,54 +1,39 @@
 import torch
-from helpers import batch_to_rowsplits
-from sklearn.cluster import DBSCAN
 import numpy as np
 
-def train(model, device, optimizer, criterion, train_loader, epoch):
+from sklearn.cluster import DBSCAN
+
+from fastgraphcompute.torch_geometric_interface import row_splits_from_strict_batch as batch_to_rowsplits
+
+def train(model, device, optimizer, criterion, scheduler, train_loader):
     model.train()
     tot_attractive_loss = 0
     tot_repulsive_loss = 0
     tot_loss = 0
+    
+    for i, data in enumerate(train_loader):
+        data = data.to(device)
+        row_splits = batch_to_rowsplits(data.batch)
 
-    with torch.profiler.profile(
-        schedule=torch.profiler.schedule(wait=1, warmup=1, active=3),
-        on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
-        record_shapes=True,
-        with_stack=True
-    ) as prof:
+        optimizer.zero_grad()
+        model_out = model(data, row_splits)
 
-        for i, data in enumerate(train_loader):
-            data = data.to(device)
+        L_att, L_rep, L_beta, _, _ = criterion(
+            beta = model_out["B"],
+            coords = model_out["H"],
+            asso_idx = data.y.to(torch.int32),
+            row_splits = row_splits
+        )
+    
+        tot_loss_batch = L_att + L_rep + L_beta
 
-            row_splits = batch_to_rowsplits(data.batch)
+        tot_loss_batch.backward()
+        optimizer.step()
 
-            scaler = torch.cuda.amp.GradScaler()
-
-            optimizer.zero_grad()
-            with torch.cuda.amp.autocast():
-                model_out = model(data)
-
-                L_att, L_rep, L_beta, _, _ = criterion(
-                    beta = model_out["B"],
-                    coords = model_out["H"],
-                    asso_idx = data.y.to(torch.int32),
-                    row_splits = row_splits
-                )
-            
-                tot_loss_batch = L_att + L_rep + L_beta
-
-            scaler.scale(tot_loss_batch).backward()
-            scaler.step(optimizer)
-            scaler.update()        
-
-            tot_attractive_loss += L_att.item()
-            tot_repulsive_loss += L_rep.item()
-            tot_noise_loss = L_beta.item()
-            tot_loss += tot_loss_batch.item()
-
-            del L_att, L_rep, L_beta, tot_loss_batch
-            torch.cuda.empty_cache()
-
-            prof.step()
+        tot_attractive_loss += L_att.item()
+        tot_repulsive_loss += L_rep.item()
+        tot_noise_loss = L_beta.item()
+        tot_loss += tot_loss_batch.item()
 
     losses = {
         "attractive": tot_attractive_loss / len(train_loader),
@@ -56,15 +41,20 @@ def train(model, device, optimizer, criterion, train_loader, epoch):
         "noise": tot_noise_loss / len(train_loader),
         "loss": tot_loss / len(train_loader),
     }
+    
+    if scheduler is not None:
+        scheduler.step()
 
-    print("Memory used: ", torch.cuda.memory_allocated() / 1e9, "GB")
-    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-    print(torch.cuda.memory_summary(device=None, abbreviated=False))
     return model_out, losses
 
-def validation(data, model, eps=0.2):
+@torch.no_grad()
+def validation(data, model, device, eps=0.2):
+    data = data.to(device)
+    row_splits = batch_to_rowsplits(data.batch)
+
     model.eval()
-    out = model(data)
+    out = model(data, row_splits)
+    
     X = out["H"].cpu().detach().numpy()
     cluster = DBSCAN(eps=eps, min_samples=2).fit(X)
 
@@ -74,6 +64,8 @@ def validation(data, model, eps=0.2):
     perfect = []
     lhc = []
     dm = []
+    perf_truth = []
+    perf_fakes = []
 
     for uniq_cl in uniq_data_labels:
         true_cluster_indices = np.where(data_labels == uniq_cl)[0]
@@ -100,5 +92,14 @@ def validation(data, model, eps=0.2):
             lhc.append(1 if num_elements_correct / num_elements_true > 0.75 else 0)
             dm.append(1 if (num_elements_correct / num_elements_true >= 0.5 and 
                            num_elements_fake / num_elements_pred < 0.5) else 0)
+            
+            perf_truth.append(num_elements_correct / num_elements_true)
+            perf_fakes.append(num_elements_fake / num_elements_pred)
+            
+            print(f"Cluster {uniq_cl}: {num_elements_true} true elements, {num_elements_pred} identified elements, {num_elements_correct} correct, {num_elements_fake} fake")
+    
+    print(f"Number of true clusters: {len(uniq_data_labels)}")
+    print(f"Number of predicted clusters: {len(set(cluster.labels_)) - 1}")
+    print(f"Number of noisy segments: {np.sum(cluster.labels_ == -1)}")
 
     return np.mean(perfect), np.mean(lhc), np.mean(dm)

@@ -109,7 +109,3 @@ class ColumnWiseNormalizeFeatures(BaseTransform):
             data.edge_attr = (data.edge_attr - mean) / std
             
         return data
-
-def batch_to_rowsplits(batch: torch.Tensor) -> torch.Tensor:
-    counts = torch.bincount(batch)
-    return torch.cat([torch.tensor([0], device=batch.device), counts.cumsum(dim=0)]).to(torch.int32)

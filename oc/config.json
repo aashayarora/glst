@@ -1,0 +1,12 @@
+{
+    "input_path": "./data/muonG_wFakes/",
+    "output_path": "./output/",
+    "epochs": 200,
+    "validation_step": 20,
+    "save_step": 25,
+
+    "training_split": 0.8,
+    "batch_size": 16,
+    "learning_rate": 0.001,
+    "subset": 100
+}
